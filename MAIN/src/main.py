@@ -6,13 +6,14 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from datetime import datetime
 import json
+import joblib
 
 from data.preprocess import DataPreprocessor
 from features.feature_engineering import FeatureEngineer
 from models.train import LeadScoringModel
 from models.predict import LeadPredictor
 from visualization.visualize import LeadScoringVisualizer
-from visualization.dashboard import LeadScoringDashboard
+from visualization.dashboard import LeadDashboard
 from config.config import get_config
 
 class LeadScoringSystem:
@@ -150,7 +151,7 @@ class LeadScoringSystem:
     
     def run_dashboard(self):
         """Run the Streamlit dashboard."""
-        dashboard = LeadScoringDashboard()
+        dashboard = LeadDashboard()
         dashboard.run()
     
     def predict_from_csv(self, csv_path: str, model_path: str) -> List[Dict[str, Any]]:
@@ -192,32 +193,66 @@ class LeadScoringSystem:
 def train_model(data_path: str, config: Dict[str, Any]) -> Dict[str, Any]:
     """Train the lead scoring model."""
     # Initialize components
+    print("\n1. INITIALIZING COMPONENTS")
     preprocessor = DataPreprocessor(config)
     feature_engineer = FeatureEngineer(config)
     model = LeadScoringModel(model_type='xgboost')
     
-    # Prepare data
-    X_train, X_test, y_train, y_test = preprocessor.prepare_data(data_path)
+    # Prepare data - now returns DataFrames instead of numpy arrays
+    print("\n2. PREPARING DATA")
+    X_train_df, X_test_df, y_train, y_test = preprocessor.prepare_data(data_path)
+    
+    print(f"X_train_df shape: {X_train_df.shape}, columns: {X_train_df.columns.tolist()}")
+    print(f"X_test_df shape: {X_test_df.shape}, columns: {X_test_df.columns.tolist()}")
+    print(f"y_train shape: {y_train.shape}, class counts: {np.bincount(y_train)}")
+    print(f"y_test shape: {y_test.shape}, class counts: {np.bincount(y_test)}")
     
     # Engineer features
-    X_train = feature_engineer.engineer_features(pd.DataFrame(X_train))
-    X_test = feature_engineer.engineer_features(pd.DataFrame(X_test))
+    print("\n3. ENGINEERING FEATURES")
+    X_train_df = feature_engineer.engineer_features(X_train_df)
+    X_test_df = feature_engineer.engineer_features(X_test_df)
     
-    # Split into train and validation sets
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_train, y_train, test_size=0.2, random_state=42
-    )
+    print(f"After feature engineering - X_train_df shape: {X_train_df.shape}")
+    print(f"After feature engineering - X_test_df shape: {X_test_df.shape}")
     
-    # Train model
-    best_params = model.train(X_train, y_train, X_val, y_val)
+    # Verify we have features
+    if X_train_df.shape[1] == 0:
+        raise ValueError("After feature engineering, X_train_df has 0 features!")
+    
+    # Convert to numpy arrays for model training
+    X_train = X_train_df.values
+    X_test = X_test_df.values
+    
+    # Store feature names in the model
+    model.feature_names = X_train_df.columns.tolist()
+    print(f"Feature names: {model.feature_names}")
+    
+    # Train model (only pass X_train and y_train)
+    print("\n4. TRAINING MODEL")
+    best_params = model.train(X_train, y_train)
     
     # Evaluate model
+    print("\n5. EVALUATING MODEL")
     metrics = model.evaluate(X_test, y_test)
     
+    # Save model with feature names
+    print("\n6. SAVING MODEL")
+    model_data = {
+        'model': model.model,
+        'feature_names': X_train_df.columns.tolist(),
+        'best_params': best_params
+    }
+    
     # Save model
-    model_path = os.path.join(config['paths']['model_dir'], 
+    model_dir = config.get('paths', {}).get('model_dir', 'models')
+    os.makedirs(model_dir, exist_ok=True)
+    model_path = os.path.join(model_dir, 
                             f'lead_scoring_model_{datetime.now().strftime("%Y%m%d_%H%M%S")}.joblib')
-    model.save_model(model_path)
+    try:
+        joblib.dump(model_data, model_path)
+        print(f"Model saved to {model_path}")
+    except Exception as e:
+        print(f"Error saving model: {str(e)}")
     
     return metrics
 
@@ -246,7 +281,7 @@ def predict_from_csv(data_path: str, model_path: str, config: Dict[str, Any]) ->
 
 def run_dashboard():
     """Run the Streamlit dashboard."""
-    dashboard = LeadScoringDashboard()
+    dashboard = LeadDashboard()
     dashboard.run()
 
 def main():

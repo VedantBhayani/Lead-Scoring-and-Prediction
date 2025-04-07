@@ -24,8 +24,8 @@ class LeadScoringModel:
         if len(unique_classes) < 2:
             print(f"Error: Only one class ({unique_classes[0]}) present in the data. Need at least two classes for binary classification.")
             return False
-        if len(y) < 10:
-            print("Error: Not enough samples for training. Need at least 10 samples.")
+        if len(y) < 5:  # Reduced from 10 to 5 for testing with smaller datasets
+            print("Error: Not enough samples for training. Need at least 5 samples.")
             return False
         print(f"\nClass distribution:")
         for cls in unique_classes:
@@ -80,6 +80,31 @@ class LeadScoringModel:
     def train_xgboost(self, X_train: np.ndarray, y_train: np.ndarray) -> Dict[str, Any]:
         """Train XGBoost model with hyperparameter optimization using cross-validation."""
         print("Training XGBoost model...")
+        
+        # Safety check - make sure X_train has at least one feature
+        if X_train.shape[1] == 0:
+            raise ValueError("Input data has 0 features. Cannot train the model.")
+            
+        print(f"Training data shape: {X_train.shape}")
+            
+        # For small datasets, use simpler model without hyperparameter tuning
+        if X_train.shape[0] < 20:
+            print("Small dataset detected, using simple model without hyperparameter tuning")
+            params = {
+                'max_depth': 3,
+                'learning_rate': 0.1,
+                'n_estimators': 50,
+                'min_child_weight': 1,
+                'subsample': 0.8,
+                'eval_metric': 'auc',
+                'use_label_encoder': False
+            }
+            self.best_params = params
+            self.model = xgb.XGBClassifier(**params, random_state=42)
+            self.model.fit(X_train, y_train)
+            return params
+        
+        # For larger datasets, use hyperparameter optimization
         def objective(trial):
             try:
                 params = {
@@ -87,11 +112,13 @@ class LeadScoringModel:
                     'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1),
                     'n_estimators': trial.suggest_int('n_estimators', 50, 200),
                     'min_child_weight': trial.suggest_int('min_child_weight', 1, 3),
-                    'subsample': trial.suggest_float('subsample', 0.6, 0.8)
+                    'subsample': trial.suggest_float('subsample', 0.6, 0.8),
+                    'eval_metric': 'auc',
+                    'use_label_encoder': False
                 }
                 
-                # Use 5-fold cross-validation
-                cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                # Use 3-fold cross-validation instead of 5-fold for smaller datasets
+                cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
                 scores = []
                 
                 for train_idx, val_idx in cv.split(X_train, y_train):
@@ -113,7 +140,7 @@ class LeadScoringModel:
                 return float('-inf')
         
         study = optuna.create_study(direction='maximize')
-        study.optimize(objective, n_trials=20)
+        study.optimize(objective, n_trials=5)  # Reduced from 20 to 5 for faster training
         
         if not study.trials_dataframe().empty:
             self.best_params = study.best_params

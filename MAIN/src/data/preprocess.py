@@ -2,17 +2,21 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List, Union
 import os
 
 class DataPreprocessor:
-    def __init__(self, config: Dict[str, Any]):
-        self.config = config
-        self.categorical_columns = config['categorical_columns']
-        self.numerical_columns = config['numerical_columns']
-        self.target_column = config['target_column']
+    def __init__(self, config: Dict[str, Any] = None):
+        self.config = config or {}
+        # Default column configurations that match our sample data
+        self.categorical_columns = self.config.get('categorical_columns', 
+                                                 ['company_size', 'lead_source', 'industry', 'country'])
+        self.numerical_columns = self.config.get('numerical_columns', 
+                                               ['website_visits', 'email_opens', 'form_submissions', 'time_on_site'])
+        self.target_column = self.config.get('target_column', 'converted')
         self.scaler = StandardScaler()
         self.label_encoders = {}
+        self.feature_names = []  # Store feature names
     
     def load_data(self, file_path: str) -> pd.DataFrame:
         """Load data from CSV file."""
@@ -42,21 +46,38 @@ class DataPreprocessor:
         df_processed = df.copy()
         
         # Handle missing values
-        df_processed[self.numerical_columns] = df_processed[self.numerical_columns].fillna(0)
-        df_processed[self.categorical_columns] = df_processed[self.categorical_columns].fillna('Unknown')
+        for col in self.numerical_columns:
+            if col in df_processed.columns:
+                df_processed[col] = df_processed[col].fillna(0)
+        
+        for col in self.categorical_columns:
+            if col in df_processed.columns:
+                df_processed[col] = df_processed[col].fillna('Unknown')
+        
         print("Handled missing values")
         
-        # Convert categorical variables to numeric
+        # Convert categorical variables to numeric while preserving column names
         for col in self.categorical_columns:
-            df_processed[col] = pd.Categorical(df_processed[col]).codes
+            if col in df_processed.columns:
+                df_processed[col] = pd.Categorical(df_processed[col]).codes
         print("Encoded categorical variables")
+        
+        # Store feature names (all columns except target)
+        self.feature_names = [col for col in df_processed.columns if col != self.target_column]
             
         return df_processed
     
-    def prepare_data(self, file_path: str, test_size: float = 0.2) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Load, validate, preprocess and split data."""
+    def prepare_data(self, file_path_or_df: Union[str, pd.DataFrame], test_size: float = 0.2) -> Tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray]:
+        """Load, validate, preprocess and split data.
+        
+        Returns:
+            X_train_df, X_test_df, y_train, y_test: DataFrames for X and numpy arrays for y
+        """
         # Load data
-        df = self.load_data(file_path)
+        if isinstance(file_path_or_df, str):
+            df = self.load_data(file_path_or_df)
+        else:
+            df = file_path_or_df.copy()
         
         # Validate data
         self.validate_data(df)
@@ -64,19 +85,33 @@ class DataPreprocessor:
         # Preprocess data
         df_processed = self.preprocess_data(df)
         
+        # Get available feature columns (must be a non-empty list)
+        feature_columns = self.categorical_columns + self.numerical_columns
+        available_columns = [col for col in feature_columns if col in df_processed.columns]
+        
+        if not available_columns:
+            raise ValueError(f"No valid feature columns found in the data. Available columns: {df_processed.columns.tolist()}")
+            
         # Prepare features and target
-        X = df_processed[self.categorical_columns + self.numerical_columns].values
-        y = df_processed[self.target_column].values if self.target_column in df.columns else None
+        X_df = df_processed[available_columns]
+        y = df_processed[self.target_column].values if self.target_column in df_processed.columns else None
+        
+        # Store the feature names for later use
+        self.feature_names = available_columns
+        
+        # Check X_df has features
+        if X_df.shape[1] == 0:
+            raise ValueError(f"Processed data has 0 features. Available columns: {df_processed.columns.tolist()}")
         
         # Split data if target is available
         if y is not None:
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=test_size, random_state=42
+            X_train_df, X_test_df, y_train, y_test = train_test_split(
+                X_df, y, test_size=test_size, random_state=42
             )
-            print(f"Data split into training ({X_train.shape}) and test ({X_test.shape}) sets")
-            return X_train, X_test, y_train, y_test
+            print(f"Data split into training {X_train_df.shape} and test {X_test_df.shape} sets")
+            return X_train_df, X_test_df, y_train, y_test
         else:
-            return X, None, None, None
+            return X_df, None, None, None
     
     def handle_missing_values(self, df: pd.DataFrame) -> pd.DataFrame:
         """Handle missing values in the dataset."""
@@ -108,6 +143,10 @@ class DataPreprocessor:
         df_scaled = df.copy()
         df_scaled[numeric_columns] = self.scaler.fit_transform(df_scaled[numeric_columns])
         return df_scaled
+    
+    def get_feature_names(self) -> List[str]:
+        """Return the list of feature names."""
+        return self.feature_names
     
     def save_preprocessor(self, file_path: str):
         """Save preprocessor state for later use."""
@@ -144,11 +183,11 @@ def main():
     
     try:
         # Process data
-        X_train, X_test, y_train, y_test = preprocessor.prepare_data(input_file)
+        X_train_df, X_test_df, y_train, y_test = preprocessor.prepare_data(input_file)
         
         # Save processed data
-        np.save(os.path.join(output_dir, 'X_train.npy'), X_train)
-        np.save(os.path.join(output_dir, 'X_test.npy'), X_test)
+        np.save(os.path.join(output_dir, 'X_train.npy'), X_train_df.values)
+        np.save(os.path.join(output_dir, 'X_test.npy'), X_test_df.values)
         np.save(os.path.join(output_dir, 'y_train.npy'), y_train)
         np.save(os.path.join(output_dir, 'y_test.npy'), y_test)
         
