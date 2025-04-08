@@ -4,6 +4,7 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from typing import Tuple, Dict, Any, List, Union
 import os
+import json
 
 class DataPreprocessor:
     def __init__(self, config: Dict[str, Any] = None):
@@ -14,9 +15,12 @@ class DataPreprocessor:
         self.numerical_columns = self.config.get('numerical_columns', 
                                                ['website_visits', 'email_opens', 'form_submissions', 'time_on_site'])
         self.target_column = self.config.get('target_column', 'converted')
+        self.name_column = self.config.get('name_column', 'lead_name')  # Add name column configuration
+        self.id_column = self.config.get('id_column', 'lead_id')  # Add ID column configuration
         self.scaler = StandardScaler()
         self.label_encoders = {}
         self.feature_names = []  # Store feature names
+        self.name_mapping = {}  # Store mapping between lead IDs and names
     
     def load_data(self, file_path: str) -> pd.DataFrame:
         """Load data from CSV file."""
@@ -24,6 +28,21 @@ class DataPreprocessor:
             df = pd.read_csv(file_path)
             print(f"Successfully loaded data from {file_path}")
             print(f"Data shape: {df.shape}")
+            
+            # Create ID column if it doesn't exist
+            if self.id_column not in df.columns:
+                df[self.id_column] = range(len(df))
+                print(f"Created {self.id_column} column with sequential IDs")
+            
+            # Create name column if it doesn't exist
+            if self.name_column not in df.columns:
+                df[self.name_column] = [f"Lead_{i}" for i in range(len(df))]
+                print(f"Created {self.name_column} column with default names")
+            
+            # Create name mapping
+            self.name_mapping = dict(zip(df[self.id_column], df[self.name_column]))
+            print(f"Created name mapping for {len(self.name_mapping)} leads")
+            
             return df
         except Exception as e:
             raise Exception(f"Error loading data: {str(e)}")
@@ -45,6 +64,16 @@ class DataPreprocessor:
         # Create a copy to avoid modifying original
         df_processed = df.copy()
         
+        # Store name mapping before dropping name columns
+        if self.id_column in df_processed.columns and self.name_column in df_processed.columns:
+            self.name_mapping = dict(zip(df_processed[self.id_column], df_processed[self.name_column]))
+        
+        # Drop name and ID columns as they shouldn't be used as features
+        columns_to_drop = [col for col in [self.name_column, self.id_column] if col in df_processed.columns]
+        if columns_to_drop:
+            df_processed = df_processed.drop(columns=columns_to_drop)
+            print(f"Dropped columns: {columns_to_drop}")
+        
         # Handle missing values
         for col in self.numerical_columns:
             if col in df_processed.columns:
@@ -59,8 +88,18 @@ class DataPreprocessor:
         # Convert categorical variables to numeric while preserving column names
         for col in self.categorical_columns:
             if col in df_processed.columns:
-                df_processed[col] = pd.Categorical(df_processed[col]).codes
+                # Create a label encoder for this column if it doesn't exist
+                if col not in self.label_encoders:
+                    self.label_encoders[col] = LabelEncoder()
+                # Fit and transform the column
+                df_processed[col] = self.label_encoders[col].fit_transform(df_processed[col])
         print("Encoded categorical variables")
+        
+        # Scale numerical features
+        numerical_present = [col for col in self.numerical_columns if col in df_processed.columns]
+        if numerical_present:
+            df_processed[numerical_present] = self.scaler.fit_transform(df_processed[numerical_present])
+            print("Scaled numerical features")
         
         # Store feature names (all columns except target)
         self.feature_names = [col for col in df_processed.columns if col != self.target_column]
@@ -161,13 +200,40 @@ class DataPreprocessor:
         """Load preprocessor state."""
         # Load the state (implementation depends on your storage method)
         pass
+    
+    def get_name_mapping(self) -> Dict[Any, str]:
+        """Return the mapping between lead IDs and names."""
+        return self.name_mapping
+    
+    def save_name_mapping(self, output_dir: str):
+        """Save name mapping to a JSON file."""
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        
+        mapping_file = os.path.join(output_dir, 'name_mapping.json')
+        # Convert all keys to strings for JSON compatibility
+        string_mapping = {str(k): v for k, v in self.name_mapping.items()}
+        
+        with open(mapping_file, 'w') as f:
+            json.dump(string_mapping, f, indent=4)
+        print(f"Name mapping saved to: {mapping_file}")
+    
+    def load_name_mapping(self, file_path: str):
+        """Load name mapping from a JSON file."""
+        with open(file_path, 'r') as f:
+            string_mapping = json.load(f)
+        # Convert string keys back to original type if needed
+        self.name_mapping = {int(k): v for k, v in string_mapping.items()}
+        print(f"Loaded name mapping for {len(self.name_mapping)} leads")
 
 def main():
     # Configuration
     config = {
         'categorical_columns': ['company_size', 'lead_source', 'industry', 'country'],
         'numerical_columns': ['website_visits', 'email_opens', 'form_submissions', 'time_on_site'],
-        'target_column': 'converted'
+        'target_column': 'converted',
+        'name_column': 'lead_name',
+        'id_column': 'lead_id'
     }
     
     # Initialize preprocessor
@@ -191,8 +257,17 @@ def main():
         np.save(os.path.join(output_dir, 'y_train.npy'), y_train)
         np.save(os.path.join(output_dir, 'y_test.npy'), y_test)
         
+        # Save feature names
+        with open(os.path.join(output_dir, 'feature_names.txt'), 'w') as f:
+            f.write('\n'.join(preprocessor.get_feature_names()))
+        
+        # Save name mapping
+        preprocessor.save_name_mapping(output_dir)
+        
         print("\nData preprocessing completed successfully!")
         print(f"Processed data saved to: {output_dir}")
+        print(f"Number of features: {len(preprocessor.get_feature_names())}")
+        print(f"Number of leads with names: {len(preprocessor.get_name_mapping())}")
         
     except Exception as e:
         print(f"Error during preprocessing: {str(e)}")

@@ -8,13 +8,13 @@ from datetime import datetime
 import json
 import joblib
 
-from data.preprocess import DataPreprocessor
-from features.feature_engineering import FeatureEngineer
-from models.train import LeadScoringModel
-from models.predict import LeadPredictor
-from visualization.visualize import LeadScoringVisualizer
-from visualization.dashboard import LeadDashboard
-from config.config import get_config
+from src.data.preprocess import DataPreprocessor
+from src.features.feature_engineering import FeatureEngineer
+from src.models.train import LeadScoringModel
+from src.models.predict import LeadPredictor
+from src.visualization.visualize import LeadScoringVisualizer
+from src.visualization.dashboard import LeadDashboard
+from src.config.config import get_config
 
 class LeadScoringSystem:
     def __init__(self, config: Dict[str, Any]):
